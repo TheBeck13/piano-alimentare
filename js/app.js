@@ -38,8 +38,13 @@ const capFirst = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 const conArticolo = (d) => `${d === 'dom' ? 'la' : 'il'} ${NOMI_GIORNI[d].toLowerCase()}`;
 const articolo = (d) => (d === 'dom' ? 'la' : 'il');
 const choiceKey = (meal, cat) => `${meal.id}|${cat.nome}`;
-// si possono aggiungere alimenti propri solo ai contorni
-const allowCustom = (cat) => /contorn/i.test(cat.nome);
+// categorie in cui si possono aggiungere alimenti non presenti nel piano, con i testi da mostrare
+const CUSTOM_CATS = [
+  { test: /contorn/i, uno: 'un contorno', es: 'Cicoria', nei: 'nei contorni', ai: 'ai contorni', dei: 'dei contorni' },
+  { test: /^frutta( fresca)?$/i, uno: 'un frutto', es: 'Uva', nei: 'nella frutta', ai: 'alla frutta', dei: 'della frutta' },
+];
+const customInfo = (cat) => CUSTOM_CATS.find((c) => c.test.test(cat.nome));
+const allowCustom = (cat) => !!customInfo(cat);
 const options = (cat) => (allowCustom(cat) ? [...cat.opzioni, ...store.getCustom(cat.nome).map((o) => ({ ...o, custom: true }))] : cat.opzioni);
 const selectable = (cat) => options(cat).filter((o) => !o.evitare);
 // quantità più frequente della categoria, proposta per gli alimenti aggiunti
@@ -370,6 +375,7 @@ function openSheet(mealId, catIdx) {
   const list = options(cat);
   const canAdd = !readonly && allowCustom(cat);
   const usual = usualQty(cat);
+  const ci = customInfo(cat);
 
   const items = list.map((o, oi) => {
     const when = last.get(`${cat.nome}|${o.nome}`);
@@ -391,13 +397,13 @@ function openSheet(mealId, catIdx) {
   const addRow = canAdd ? `<li class="add-row">
       <button class="opt add-open" data-action="add-open">
         <span class="tick plus">${icon('plus')}</span>
-        <span class="opt-name"><span>Aggiungi un contorno</span><small>Non è nella lista? Scrivilo tu</small></span><span></span>
+        <span class="opt-name"><span>Aggiungi ${ci?.uno}</span><small>Non è nella lista? Scrivilo tu</small></span><span></span>
       </button>
       <form class="add-form" hidden>
-        <input name="nome" type="text" placeholder="Es. Cicoria" aria-label="Nome del contorno" autocomplete="off" required maxlength="60">
+        <input name="nome" type="text" placeholder="Es. ${ci?.es}" aria-label="Nome dell'alimento" autocomplete="off" required maxlength="60">
         <label class="qty-in"><input name="g" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="${esc(usual)}" aria-label="Grammi" maxlength="4"><span>g</span></label>
         <button type="submit" class="btn-solid">Aggiungi</button>
-        ${usual ? `<p class="add-hint">Se non indichi i grammi uso ${esc(usual)} g, la quantità dei contorni più comuni del piano.</p>` : ''}
+        ${usual ? `<p class="add-hint">Se non indichi i grammi uso ${esc(usual)} g, la quantità più comune ${ci?.dei} del piano.</p>` : ''}
       </form>
     </li>` : '';
 
@@ -459,7 +465,7 @@ function openSheet(mealId, catIdx) {
       form.scrollIntoView({ block: 'nearest' });
     } else if (b.dataset.action === 'remove-custom') {
       const o = list[+b.dataset.opt];
-      if (!confirm(`Eliminare "${o.nome}" dai contorni aggiunti?`)) return;
+      if (!confirm(`Eliminare "${o.nome}" da quelli aggiunti ${ci.nei}?`)) return;
       store.removeCustom(cat.nome, o.nome);
       if (chosen === o.nome) store.setChoice(state.date, day, key, null);
       render();
@@ -476,7 +482,7 @@ function openSheet(mealId, catIdx) {
     const item = { nome: nome.charAt(0).toUpperCase() + nome.slice(1), qty: g ? `g ${g}` : null };
     store.addCustom(cat.nome, item);
     pick(item.nome);
-    toast(`${item.nome} aggiunto ai contorni`);
+    toast(`${item.nome} aggiunto ${ci.ai}`);
   });
   sheet.querySelector('.filter')?.addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
