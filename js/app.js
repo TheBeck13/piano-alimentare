@@ -17,6 +17,7 @@ const state = {
   plan: store.getPlan(),
   view: 'oggi',          // oggi | settimana | info | giorno
   browseDay: null,       // giorno aperto dalla vista Settimana (sola lettura)
+  preview: null,         // giorno che si sta solo guardando dalla vista Oggi
   open: new Map(),       // pasto → aperto/chiuso deciso dall'utente
   date: store.todayISO(),
   scrolledToNow: false,
@@ -35,8 +36,17 @@ const realDay = () => GIORNI[(new Date().getDay() + 6) % 7];
 const followedDay = () => store.getOverride(state.date) || realDay();
 const capFirst = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 const conArticolo = (d) => `${d === 'dom' ? 'la' : 'il'} ${NOMI_GIORNI[d].toLowerCase()}`;
+const articolo = (d) => (d === 'dom' ? 'la' : 'il');
 const choiceKey = (meal, cat) => `${meal.id}|${cat.nome}`;
 const selectable = (cat) => cat.opzioni.filter((o) => !o.evitare);
+
+// giorno mostrato e se è modificabile (le scelte si segnano solo sul giorno seguito oggi)
+function viewCtx() {
+  if (state.view === 'giorno') return { day: state.browseDay, readonly: true, preview: false };
+  const followed = followedDay();
+  if (state.preview && state.preview !== followed) return { day: state.preview, readonly: true, preview: true };
+  return { day: followed, readonly: false, preview: false };
+}
 
 function dateLabel() {
   const d = new Date();
@@ -102,6 +112,7 @@ function render(anim) {
     return;
   }
   app.classList.remove('no-tabs');
+  app.classList.toggle('has-preview', state.view === 'oggi' && viewCtx().preview);
   const views = { oggi: renderToday, giorno: renderToday, settimana: renderWeek, info: renderInfo };
   app.innerHTML = views[state.view]();
   renderTabbar();
@@ -128,15 +139,15 @@ function renderTabbar() {
 }
 
 function renderToday() {
-  const readonly = state.view === 'giorno';
-  const day = readonly ? state.browseDay : followedDay();
+  const { day, readonly, preview } = viewCtx();
+  const followed = followedDay();
   const real = realDay();
   const g = state.plan.giorni[day];
   const choices = readonly ? {} : store.getChoices(state.date, day);
   const macro = state.plan.macro[day];
 
   let hero;
-  if (readonly) {
+  if (readonly && !preview) {
     hero = `
       <header class="hero">
         <div class="hero-top">
@@ -149,14 +160,29 @@ function renderToday() {
       </header>`;
   } else {
     const pills = GIORNI.map((d) => `
-      <button class="pill ${d === day ? 'is-selected' : ''} ${d === real ? 'is-real' : ''}" data-action="day" data-day="${d}"
-        aria-pressed="${d === day}" aria-label="${NOMI_GIORNI[d]}${d === real ? ' (oggi)' : ''}">${SHORT[d]}</button>`).join('');
+      <button class="pill ${d === followed ? 'is-selected' : ''} ${preview && d === day ? 'is-preview' : ''} ${d === real ? 'is-real' : ''}" data-action="day" data-day="${d}"
+        aria-pressed="${d === day}" aria-label="${NOMI_GIORNI[d]}${d === real ? ' (oggi)' : ''}${d === followed ? ', piano seguito oggi' : ''}">${SHORT[d]}</button>`).join('');
+    const nome = esc(NOMI_GIORNI[day].toLowerCase());
+    const title = preview
+      ? `Il piano ${day === 'dom' ? 'della' : 'del'} <em>${nome}</em>`
+      : day === real ? 'Cosa mangio oggi' : `Oggi segui ${articolo(day)} <em>${nome}</em>`;
+    const note = preview
+      ? `<div class="preview-bar" role="region" aria-label="Anteprima">
+          <p><b>Stai solo guardando ${articolo(day)} ${nome}.</b> Vuoi seguirlo oggi?</p>
+          <div class="preview-actions">
+            <button class="btn-ghost" data-action="cancel-preview">Annulla</button>
+            <button class="btn-solid" data-action="follow" data-day="${day}">${icon('check')}Oggi seguo ${articolo(day)} ${nome}</button>
+          </div>
+        </div>`
+      : day !== real
+        ? `<p class="follow-note">${icon('check')}<span>Al posto ${real === 'dom' ? 'della' : 'del'} ${esc(NOMI_GIORNI[real].toLowerCase())}</span><button data-action="reset">Ripristina</button></p>`
+        : '';
     hero = `
       <header class="hero">
-        <p class="eyebrow">${esc(dateLabel())}</p>
-        <h1>${day === real ? 'Cosa mangio oggi' : `Oggi segui ${day === 'dom' ? 'la' : 'il'} <em>${esc(NOMI_GIORNI[day].toLowerCase())}</em>`}</h1>
-        <div class="daypills" role="group" aria-label="Giorno del piano che segui oggi">${pills}</div>
-        ${day !== real ? `<p class="override-note"><span>Oggi è ${esc(NOMI_GIORNI[real].toLowerCase())}</span><button data-action="reset">${icon('reset')}Torna a ${esc(NOMI_GIORNI[real].toLowerCase())}</button></p>` : ''}
+        <p class="eyebrow">${preview ? 'Anteprima' : esc(dateLabel())}</p>
+        <h1>${title}</h1>
+        <div class="daypills" role="group" aria-label="Guarda il piano di un altro giorno">${pills}</div>
+        ${note}
         ${macroHTML(macro)}
       </header>`;
   }
@@ -325,8 +351,7 @@ function renderOnboarding() {
 // ---------- bottom sheet ----------
 
 function openSheet(mealId, catIdx) {
-  const readonly = state.view === 'giorno';
-  const day = readonly ? state.browseDay : followedDay();
+  const { day, readonly } = viewCtx();
   const meal = state.plan.giorni[day].pasti.find((m) => m.id === mealId);
   const cat = meal.categorie[catIdx];
   const key = choiceKey(meal, cat);
@@ -451,12 +476,19 @@ async function loadPdf(file) {
   }
 }
 
-function setDay(d) {
-  const before = GIORNI.indexOf(followedDay());
-  store.setOverride(state.date, d === realDay() ? null : d);
-  const after = GIORNI.indexOf(followedDay());
+// tocco su un giorno: solo anteprima, il giorno seguito cambia con una conferma esplicita
+function previewDay(d) {
+  const before = GIORNI.indexOf(viewCtx().day);
+  state.preview = d === followedDay() ? null : d;
+  const after = GIORNI.indexOf(viewCtx().day);
   state.open.clear();
   render(after > before ? 'slide-left' : after < before ? 'slide-right' : null);
+}
+
+function follow(d) {
+  store.setOverride(state.date, d === realDay() ? null : d);
+  state.preview = null;
+  state.open.clear();
 }
 
 app.addEventListener('click', (e) => {
@@ -464,18 +496,23 @@ app.addEventListener('click', (e) => {
   if (!el || el.tagName === 'INPUT') return;
   const { action } = el.dataset;
   switch (action) {
-    case 'day': setDay(el.dataset.day); break;
-    case 'reset': setDay(realDay()); break;
+    case 'day': previewDay(el.dataset.day); break;
+    case 'cancel-preview': previewDay(followedDay()); break;
+    case 'reset':
+      follow(realDay());
+      render();
+      toast(`Oggi segui ${conArticolo(realDay())}`);
+      break;
     case 'jump': {
       const target = document.getElementById(`meal-${el.dataset.meal}`);
-      const day = state.view === 'giorno' ? state.browseDay : followedDay();
+      const { day } = viewCtx();
       state.open.set(`${day}|${el.dataset.meal}`, true);
       target?.classList.add('is-open');
       target?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
       break;
     }
     case 'fold': {
-      const day = state.view === 'giorno' ? state.browseDay : followedDay();
+      const { day } = viewCtx();
       const li = el.closest('.meal');
       const open = !li.classList.contains('is-open');
       state.open.set(`${day}|${el.dataset.meal}`, open);
@@ -487,9 +524,8 @@ app.addEventListener('click', (e) => {
     case 'browse': state.view = 'giorno'; state.browseDay = el.dataset.day; state.open.clear(); render(); scrollTo(0, 0); break;
     case 'back': state.view = 'settimana'; render(); scrollTo(0, 0); break;
     case 'follow':
-      store.setOverride(state.date, el.dataset.day === realDay() ? null : el.dataset.day);
+      follow(el.dataset.day);
       state.view = 'oggi';
-      state.open.clear();
       render();
       scrollTo(0, 0);
       toast(`Oggi segui ${conArticolo(el.dataset.day)}`);
@@ -543,6 +579,7 @@ document.addEventListener('click', (e) => {
   const b = e.target.closest('.tabbar [data-action="tab"]');
   if (!b) return;
   state.view = b.dataset.view;
+  state.preview = null;
   render();
   scrollTo(0, 0);
 });
@@ -559,16 +596,15 @@ app.addEventListener('touchend', (e) => {
   const dy = e.changedTouches[0].clientY - swipe.y;
   swipe = null;
   if (Math.abs(dx) < 80 || Math.abs(dy) > 50) return;
-  const i = GIORNI.indexOf(followedDay());
-  const next = GIORNI[(i + (dx < 0 ? 1 : 6)) % 7];
-  setDay(next);
-  toast(`Piano di ${NOMI_GIORNI[next].toLowerCase()}`);
+  const i = GIORNI.indexOf(viewCtx().day);
+  previewDay(GIORNI[(i + (dx < 0 ? 1 : 6)) % 7]);
 });
 
 // al ritorno sull'app (es. il giorno dopo) aggiorna la data
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && store.todayISO() !== state.date) {
     state.date = store.todayISO();
+    state.preview = null;
     state.open.clear();
     state.scrolledToNow = false;
     render();
