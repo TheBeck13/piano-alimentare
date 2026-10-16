@@ -73,8 +73,21 @@ export function lastChosenIndex(before) {
   return index;
 }
 
+// Alimenti aggiunti a mano, per nome di categoria (es. un contorno che non è nella lista)
+export const getCustom = (cat) => read('custom', {})[cat] ?? [];
+export function addCustom(cat, item) {
+  const all = read('custom', {});
+  all[cat] = [...(all[cat] ?? []).filter((o) => o.nome.toLowerCase() !== item.nome.toLowerCase()), item];
+  write('custom', all);
+}
+export function removeCustom(cat, nome) {
+  const all = read('custom', {});
+  all[cat] = (all[cat] ?? []).filter((o) => o.nome !== nome);
+  write('custom', all);
+}
+
 export function exportBackup() {
-  return { app: 'piano-alimentare', esportato: new Date().toISOString(), piano: getPlan(), scelte: allChoices(), override: read('override', {}) };
+  return { app: 'piano-alimentare', esportato: new Date().toISOString(), piano: getPlan(), scelte: allChoices(), override: read('override', {}), custom: read('custom', {}) };
 }
 
 export function importBackup(data) {
@@ -82,6 +95,7 @@ export function importBackup(data) {
   if (data.piano) savePlan(data.piano);
   if (data.scelte) write('scelte', data.scelte);
   if (data.override) write('override', data.override);
+  if (data.custom) write('custom', data.custom);
 }
 
 export function clearAll() {

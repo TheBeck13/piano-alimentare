@@ -1,5 +1,5 @@
 // Service worker: l'app funziona anche offline. Aggiorna VERSION quando cambi i file.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = `shell-${VERSION}`;
 const RUNTIME = 'runtime';
 const FILES = [

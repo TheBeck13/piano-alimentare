@@ -38,7 +38,16 @@ const capFirst = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 const conArticolo = (d) => `${d === 'dom' ? 'la' : 'il'} ${NOMI_GIORNI[d].toLowerCase()}`;
 const articolo = (d) => (d === 'dom' ? 'la' : 'il');
 const choiceKey = (meal, cat) => `${meal.id}|${cat.nome}`;
-const selectable = (cat) => cat.opzioni.filter((o) => !o.evitare);
+// si possono aggiungere alimenti propri solo ai contorni
+const allowCustom = (cat) => /contorn/i.test(cat.nome);
+const options = (cat) => (allowCustom(cat) ? [...cat.opzioni, ...store.getCustom(cat.nome).map((o) => ({ ...o, custom: true }))] : cat.opzioni);
+const selectable = (cat) => options(cat).filter((o) => !o.evitare);
+// quantità più frequente della categoria, proposta per gli alimenti aggiunti
+function usualQty(cat) {
+  const n = {};
+  for (const o of cat.opzioni) { const m = /^g\s*(\d+)$/.exec(o.qty || ''); if (m) n[m[1]] = (n[m[1]] || 0) + 1; }
+  return Object.entries(n).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+}
 
 // giorno mostrato e se è modificabile (le scelte si segnano solo sul giorno seguito oggi)
 function viewCtx() {
@@ -231,7 +240,7 @@ function renderMeal(meal, i, { nowIdx, status, choices, readonly, day }) {
       if (opts.length === 1 && !opts[0].ingredienti) {
         return `<li><div class="cat is-fixed"><span><span class="cat-label">${esc(c.nome)}</span><span class="cat-value">${esc(opts[0].nome)}</span></span>${qtyHTML(opts[0].qty)}</div></li>`;
       }
-      const chosen = choices[key] && c.opzioni.find((o) => o.nome === choices[key]);
+      const chosen = choices[key] && (options(c).find((o) => o.nome === choices[key]) || { nome: choices[key], qty: null });
       const value = chosen
         ? `<span class="cat-value">${esc(chosen.nome)}</span>`
         : `<span class="cat-value placeholder">${readonly ? `${c.opzioni.length} alternative` : `Scegli 1 di ${opts.length}`}</span>`;
@@ -358,22 +367,39 @@ function openSheet(mealId, catIdx) {
   const chosen = readonly ? null : store.getChoices(state.date, day)[key];
   const last = readonly ? new Map() : store.lastChosenIndex(state.date);
   const opts = selectable(cat);
+  const list = options(cat);
+  const canAdd = !readonly && allowCustom(cat);
+  const usual = usualQty(cat);
 
-  const items = cat.opzioni.map((o, oi) => {
+  const items = list.map((o, oi) => {
     const when = last.get(`${cat.nome}|${o.nome}`);
     const whenTxt = when && ago(when);
     const recent = when && (new Date(state.date) - new Date(when)) / 86400000 <= 2;
     const ingr = o.ingredienti?.length ? `<ul class="ingr">${o.ingredienti.map((x) => `<li><span>${esc(x.nome)}</span><span>${esc(x.qty || '')}</span></li>`).join('')}</ul>` : '';
     const name = `<span class="opt-name"><span>${esc(o.nome)}</span>
       ${o.evitare ? `<span class="badge-avoid">${icon('avoid')}Da evitare</span>` : ''}
+      ${o.custom ? '<small>Aggiunto da te</small>' : ''}
       ${whenTxt && !o.evitare ? `<small class="${recent ? 'recent' : ''}">Scelto ${whenTxt}</small>` : ''}${ingr}</span>`;
     if (readonly || o.evitare) {
       return `<li><div class="opt ${readonly ? 'readonly' : ''} ${o.evitare ? 'is-avoid' : ''}" ${o.evitare && !readonly ? 'aria-disabled="true"' : ''}>
         ${readonly ? '' : `<span class="tick"></span>`}${name}${qtyHTML(o.qty)}</div></li>`;
     }
-    return `<li data-name="${esc(o.nome.toLowerCase())}"><button class="opt ${chosen === o.nome ? 'is-chosen' : ''}" data-action="choose" data-opt="${oi}" aria-pressed="${chosen === o.nome}">
-      <span class="tick">${icon('check')}</span>${name}${qtyHTML(o.qty)}</button></li>`;
+    return `<li data-name="${esc(o.nome.toLowerCase())}" class="${o.custom ? 'is-custom' : ''}"><button class="opt ${chosen === o.nome ? 'is-chosen' : ''}" data-action="choose" data-opt="${oi}" aria-pressed="${chosen === o.nome}">
+      <span class="tick">${icon('check')}</span>${name}${qtyHTML(o.qty)}</button>
+      ${o.custom ? `<button class="remove-custom" data-action="remove-custom" data-opt="${oi}" aria-label="Elimina ${esc(o.nome)}">${icon('trash')}</button>` : ''}</li>`;
   }).join('');
+  const addRow = canAdd ? `<li class="add-row">
+      <button class="opt add-open" data-action="add-open">
+        <span class="tick plus">${icon('plus')}</span>
+        <span class="opt-name"><span>Aggiungi un contorno</span><small>Non è nella lista? Scrivilo tu</small></span><span></span>
+      </button>
+      <form class="add-form" hidden>
+        <input name="nome" type="text" placeholder="Es. Cicoria" aria-label="Nome del contorno" autocomplete="off" required maxlength="60">
+        <label class="qty-in"><input name="g" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="${esc(usual)}" aria-label="Grammi" maxlength="4"><span>g</span></label>
+        <button type="submit" class="btn-solid">Aggiungi</button>
+        ${usual ? `<p class="add-hint">Se non indichi i grammi uso ${esc(usual)} g, la quantità dei contorni più comuni del piano.</p>` : ''}
+      </form>
+    </li>` : '';
 
   const backdrop = document.createElement('div');
   backdrop.className = 'backdrop';
@@ -388,10 +414,10 @@ function openSheet(mealId, catIdx) {
       <div class="grabber"></div>
       <p class="eyebrow"><span class="dot"></span>${esc(meal.nome)} · ${esc(NOMI_GIORNI[day])}</p>
       <h3>${esc(cat.nome)}</h3>
-      <p class="hint">${readonly ? `${cat.opzioni.length} alternative` : 'Scegline uno'}${!readonly && opts.length > 1 ? ` tra ${opts.length}` : ''}</p>
-      ${cat.opzioni.length > 10 ? '<input class="filter" type="search" placeholder="Cerca…" aria-label="Cerca alimento" data-action="filter">' : ''}
+      <p class="hint">${readonly ? `${list.length} alternative` : 'Scegline uno'}${!readonly && opts.length > 1 ? ` tra ${opts.length}` : ''}</p>
+      ${list.length > 10 ? '<input class="filter" type="search" placeholder="Cerca…" aria-label="Cerca alimento" data-action="filter">' : ''}
     </header>
-    <ul class="opts">${items}</ul>
+    <ul class="opts">${items}${addRow}</ul>
     ${chosen ? '<div class="sheet-foot"><button class="link-btn" data-action="unchoose">Rimuovi la scelta</button></div>' : ''}`;
   document.body.append(backdrop, sheet);
   document.body.style.overflow = 'hidden';
@@ -418,16 +444,43 @@ function openSheet(mealId, catIdx) {
     const b = e.target.closest('[data-action]');
     if (!b) return;
     if (b.dataset.action === 'choose') {
-      const o = cat.opzioni[+b.dataset.opt];
+      const o = list[+b.dataset.opt];
       const already = chosen === o.nome;
       sheet.querySelectorAll('.opt.is-chosen').forEach((x) => x.classList.remove('is-chosen'));
       if (!already) b.classList.add('is-chosen');
       pick(already ? null : o.nome);
     } else if (b.dataset.action === 'unchoose') pick(null);
+    else if (b.dataset.action === 'add-open') {
+      const form = sheet.querySelector('.add-form');
+      b.hidden = true;
+      form.hidden = false;
+      form.nome.value = sheet.querySelector('.filter')?.value.trim() || '';
+      form.nome.focus();
+      form.scrollIntoView({ block: 'nearest' });
+    } else if (b.dataset.action === 'remove-custom') {
+      const o = list[+b.dataset.opt];
+      if (!confirm(`Eliminare "${o.nome}" dai contorni aggiunti?`)) return;
+      store.removeCustom(cat.nome, o.nome);
+      if (chosen === o.nome) store.setChoice(state.date, day, key, null);
+      render();
+      close();
+      setTimeout(() => openSheet(mealId, catIdx), 330);
+    }
+  });
+  sheet.querySelector('.add-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const nome = form.nome.value.trim().replace(/\s+/g, ' ');
+    if (!nome) return;
+    const g = form.g.value.replace(/\D/g, '') || usual;
+    const item = { nome: nome.charAt(0).toUpperCase() + nome.slice(1), qty: g ? `g ${g}` : null };
+    store.addCustom(cat.nome, item);
+    pick(item.nome);
+    toast(`${item.nome} aggiunto ai contorni`);
   });
   sheet.querySelector('.filter')?.addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
-    sheet.querySelectorAll('.opts > li').forEach((li) => {
+    sheet.querySelectorAll('.opts > li:not(.add-row)').forEach((li) => {
       const n = li.dataset.name ?? li.textContent.toLowerCase();
       li.hidden = q && !n.includes(q);
     });
