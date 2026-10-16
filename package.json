@@ -1,0 +1,13 @@
+{
+  "name": "piano-alimentare",
+  "version": "1.0.0",
+  "scripts": {
+    "check": "node tools/check-parser.mjs",
+    "serve": "python3 -m http.server 8080"
+  },
+  "type": "module",
+  "devDependencies": {
+    "pdfjs-dist": "^4.10.38"
+  },
+  "private": true
+}
